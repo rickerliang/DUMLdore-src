@@ -1,4 +1,4 @@
-﻿// DUMLdore - jezzab 2017 - http://www.github.com/jezzab/DUMLdore/
+﻿// DUMLdore v1.86 - jezzab 2017 - http://www.github.com/jezzab/DUMLdore/
 // This softwre is used to flash and backup firmware files from a drone, remote controller or goggles
 // It requires OpenSSL and the WinSCP .NET Assembly 
 
@@ -9,6 +9,7 @@ using System.IO;
 using System.IO.Ports;
 using Microsoft.Win32;
 using System.Diagnostics;
+using System.Net.Sockets;
 using System.Windows.Forms;
 using System.Collections.Generic;
 using System.Security.Cryptography;
@@ -22,6 +23,10 @@ namespace DUMLdore
         // fixed arrays. 0xFF used for padding. Blockcopy into array the correct values later
         // could be made more dynamic and one array only by choosing dst and src ID DUML etc. TODO
         public byte[] FWarray;
+        public byte[] filesize_array;
+        public byte[] sparkRCArray = new byte[0x3FC];
+        public byte[] sparkRCData = new byte[0x3E8];
+
         byte[] packet1_ac = { 0x55, 0x16, 0x04, 0xFC, 0x2A, 0x28, 0x65, 0x57, 0x40, 0x00, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x27, 0xD3 }; //Enter upgrade mode (delete old file if exists)
         byte[] packet2_ac = { 0x55, 0x0E, 0x04, 0x66, 0x2A, 0x28, 0x68, 0x57, 0x40, 0x00, 0x0C, 0x00, 0x88, 0x20 }; //Enable Reporting
         byte[] packet3_ac = { 0x55, 0x1A, 0x04, 0xB1, 0x2A, 0x28, 0x6B, 0x57, 0x40, 0x00, 0x08, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x04, 0xFF, 0xFF }; //Payload 
@@ -37,6 +42,11 @@ namespace DUMLdore
         byte[] packet3_gog = { 0x55, 0x1A, 0x04, 0xB1, 0x2A, 0x3C, 0xFD, 0x35, 0x40, 0x00, 0x08, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x04, 0xFF, 0xFF }; //Payload 
         byte[] packet4_gog = { 0x55, 0x1E, 0x04, 0x8A, 0x2A, 0x3C, 0x5B, 0x36, 0x40, 0x00, 0x0A, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF }; //MD5
 
+        byte[] packet1_sparkrc = { 0x55, 0x16, 0x04, 0xFC, 0x02, 0x1B, 0xEB, 0x34, 0x40, 0x00, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x77, 0x40 }; //Enter upgrade mode 
+        byte[] packet2_sparkrc = { 0x55, 0x1A, 0x04, 0xB1, 0x02, 0x1B, 0xEB, 0x34, 0x40, 0x00, 0x08, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x04, 0xFF, 0xFF }; //Send filesize
+        byte[] packet3_sparkrc = { 0x55, 0x1E, 0x04, 0x8A, 0x2A, 0x2D, 0x02, 0x28, 0x40, 0x00, 0x0A, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF }; //Send MD5
+
+
         string filename;
         string dji_comport;
         string assistant2 = "DJIBrowser";
@@ -47,7 +57,7 @@ namespace DUMLdore
 
         //AC - 551A04B12A286B5740000800YYYYYYYY0000000000000204XXXX
         //RC - 551A04B12A2DEC2740000800YYYYYYYY0000000000000204XXXX
-        // YYYYYYYY - file size in little endian
+        // YYYYYYYY - packet size in little endian
         // XXXX - CRC16 - Poly 1021 - Init 496C Ref in/out - XOR 0000 - little endian   
 
         public Form1()
@@ -90,8 +100,11 @@ namespace DUMLdore
                 filename = openFileDialog1.FileName;
                 FWarray = File.ReadAllBytes(filename);
 
+                uint filesize = (uint)FWarray.Length;
+                filesize_array = BitConverter.GetBytes(filesize);
+
                 //Check the file isnt too small
-                if(FWarray.Length < 0x200)
+                if (FWarray.Length < 0x200)
                     MessageBox.Show("Invalid Firmware File. File too small");
                 else
                 {
@@ -139,7 +152,7 @@ namespace DUMLdore
 
                     toolStripStatusLabel1.Text = "Starting serial comms";
                     uint filesize = (uint)FWarray.Length;
-                    byte[] filesize_array = BitConverter.GetBytes(filesize);
+                    filesize_array = BitConverter.GetBytes(filesize);
 
                     //copy bytes for filesize
                     Buffer.BlockCopy(filesize_array, 0, packet3_ac, 12, filesize_array.Length);
@@ -199,7 +212,7 @@ namespace DUMLdore
 
                     toolStripStatusLabel1.Text = "Starting serial comms";
                     uint filesize = (uint)FWarray.Length;
-                    byte[] filesize_array = BitConverter.GetBytes(filesize);
+                    filesize_array = BitConverter.GetBytes(filesize);
 
                     //copy bytes for filesize
                     Buffer.BlockCopy(filesize_array, 0, packet3_rc, 12, filesize_array.Length);
@@ -261,8 +274,7 @@ namespace DUMLdore
 
                     toolStripStatusLabel1.Text = "Starting serial comms";
                     uint filesize = (uint)FWarray.Length;
-                    //filesize = SwapBytes(filesize);
-                    byte[] filesize_array = BitConverter.GetBytes(filesize);
+                    filesize_array = BitConverter.GetBytes(filesize);
 
                     //copy bytes for filesize
                     Buffer.BlockCopy(filesize_array, 0, packet3_gog, 12, filesize_array.Length);
@@ -399,7 +411,6 @@ namespace DUMLdore
                 this.toolStripStatusLabel1.Text = "FTP access failed";
             }
         }
-        
         // Compile an array of COM port names associated with given VID and PID
         List<string> ComPortNames(String VID, String PID)
         {
@@ -427,7 +438,6 @@ namespace DUMLdore
             }
             return comports;
         }
-
         // show FTP file transfer progress
         public void SessionFileTransferProgress(object sender, FileTransferProgressEventArgs e)
         {
@@ -462,6 +472,7 @@ namespace DUMLdore
                     HostName = "192.168.42.2",
                     UserName = "guest",
                     Password = "password",
+                    TimeoutInMilliseconds = 30000,    // Default 15sec timeout is too short for aircraft to generate the encrypted temp files in some cases - Kilrah
                 };
                 using (Session session = new Session())
                 {
@@ -494,8 +505,8 @@ namespace DUMLdore
                 {
                     Protocol = Protocol.Ftp,
                     HostName = "192.168.42.2",
-                    UserName = "guest",
-                    Password = "password",
+                    UserName = "root",
+                    Password = "Big~9China",
                 };
                 using (Session session = new Session())
                 {
@@ -504,6 +515,8 @@ namespace DUMLdore
                     session.Open(sessionOptions);
                     downloading = 1;
                     TransferOperationResult transferResult;
+                    //Antirollback fix
+                    session.RemoveFiles("/upgrade/upgrade/backup/*.cfg.sig");
                     // Upload file
                     transferResult = session.PutFiles(filename, "/upgrade/dji_system.bin");
                     if (session.FileExists("/upgrade/dji_system.bin")) { }
@@ -522,7 +535,6 @@ namespace DUMLdore
                 return 1;
             }
         }
-
         //only used for fireworks.tar/root
         public static void MakeFtpDir()
         {
@@ -584,6 +596,171 @@ namespace DUMLdore
                 v = vv ^ crc[((packet[i] ^ v) & 0xFF)];
             }
             return v;
+        }
+        //converted to C# from comm_serial2pcap.py
+        //https://github.com/mefistotelis/phantom-firmware-tools/issues/25#issuecomment-306052129
+        public uint calc_pkt55_hdr_checksum(uint seed, byte[] packet, int plength)
+        {
+            uint[] arr_2A103 = {0x00,0x5E,0xBC,0xE2,0x61,0x3F,0xDD,0x83,0xC2,0x9C,0x7E,0x20,0xA3,0xFD,0x1F,0x41,
+            0x9D,0xC3,0x21,0x7F,0xFC,0xA2,0x40,0x1E,0x5F,0x01,0xE3,0xBD,0x3E,0x60,0x82,0xDC,
+            0x23,0x7D,0x9F,0xC1,0x42,0x1C,0xFE,0xA0,0xE1,0xBF,0x5D,0x03,0x80,0xDE,0x3C,0x62,
+            0xBE,0xE0,0x02,0x5C,0xDF,0x81,0x63,0x3D,0x7C,0x22,0xC0,0x9E,0x1D,0x43,0xA1,0xFF,
+            0x46,0x18,0xFA,0xA4,0x27,0x79,0x9B,0xC5,0x84,0xDA,0x38,0x66,0xE5,0xBB,0x59,0x07,
+            0xDB,0x85,0x67,0x39,0xBA,0xE4,0x06,0x58,0x19,0x47,0xA5,0xFB,0x78,0x26,0xC4,0x9A,
+            0x65,0x3B,0xD9,0x87,0x04,0x5A,0xB8,0xE6,0xA7,0xF9,0x1B,0x45,0xC6,0x98,0x7A,0x24,
+            0xF8,0xA6,0x44,0x1A,0x99,0xC7,0x25,0x7B,0x3A,0x64,0x86,0xD8,0x5B,0x05,0xE7,0xB9,
+            0x8C,0xD2,0x30,0x6E,0xED,0xB3,0x51,0x0F,0x4E,0x10,0xF2,0xAC,0x2F,0x71,0x93,0xCD,
+            0x11,0x4F,0xAD,0xF3,0x70,0x2E,0xCC,0x92,0xD3,0x8D,0x6F,0x31,0xB2,0xEC,0x0E,0x50,
+            0xAF,0xF1,0x13,0x4D,0xCE,0x90,0x72,0x2C,0x6D,0x33,0xD1,0x8F,0x0C,0x52,0xB0,0xEE,
+            0x32,0x6C,0x8E,0xD0,0x53,0x0D,0xEF,0xB1,0xF0,0xAE,0x4C,0x12,0x91,0xCF,0x2D,0x73,
+            0xCA,0x94,0x76,0x28,0xAB,0xF5,0x17,0x49,0x08,0x56,0xB4,0xEA,0x69,0x37,0xD5,0x8B,
+            0x57,0x09,0xEB,0xB5,0x36,0x68,0x8A,0xD4,0x95,0xCB,0x29,0x77,0xF4,0xAA,0x48,0x16,
+            0xE9,0xB7,0x55,0x0B,0x88,0xD6,0x34,0x6A,0x2B,0x75,0x97,0xC9,0x4A,0x14,0xF6,0xA8,
+            0x74,0x2A,0xC8,0x96,0x15,0x4B,0xA9,0xF7,0xB6,0xE8,0x0A,0x54,0xD7,0x89,0x6B,0x35};
+
+            uint chksum = seed;
+        
+            for (int i = 0; i != plength; i++)
+            {
+                chksum = arr_2A103[((packet[i] ^ chksum) & 0xFF)];
+            }
+            return chksum;
+        }
+        public void button1_Click(object sender, EventArgs e)
+        {
+            /*
+                        TODO: Spark RC flashing TCP/DUML
+
+
+                         
+                        byte[] length_array;
+                        uint blockSize = (uint)sparkRCData.Length;
+                        uint length;
+                        int position = 0;
+
+                        //copy bytes for filesize
+                        Buffer.BlockCopy(filesize_array, 0, packet2_sparkrc, 12, filesize_array.Length);
+
+                        //calc crc and insert
+                        uint crc = CalcCRC(packet2_sparkrc, packet2_sparkrc.Length - 2);
+                        byte[] crc_array = BitConverter.GetBytes(crc);
+                        Buffer.BlockCopy(crc_array, 0, packet2_sparkrc, 24, 2);
+
+                        for (int k = 0; k != packet2_sparkrc.Length; k++ )
+                        {
+                            Console.Write(packet2_sparkrc[k].ToString("X2"));
+                            Console.Write(" ");
+                        }
+
+                        sparkRCArray[0] = 0x55; //header
+                        sparkRCArray[4] = 0x02; //source
+                        sparkRCArray[5] = 0x1B; //target
+                        sparkRCArray[6] = 0xEB; //Seq
+                        sparkRCArray[7] = 0x34; //Seq
+                        sparkRCArray[8] = 0x00; //Command Set
+                        sparkRCArray[10] = 0x09; //Command ID
+                        sparkRCArray[16] = 0xE8; //Datasize LSB
+                        sparkRCArray[17] = 0x03; //Datasize MSB
+
+                        //total packet length = 20 bytes + data blocksize
+                        length = blockSize + 20;
+                        length_array = BitConverter.GetBytes(length);
+
+                        //set to V1 DUML
+                        length_array[1] += 0x04;
+                        Buffer.BlockCopy(length_array, 0, sparkRCArray, 1, 2);
+
+                        //calc header CRC8
+                        sparkRCArray[3] = (byte)calc_pkt55_hdr_checksum(0x77, sparkRCArray, 3);
+                        Buffer.BlockCopy(FWarray, 0, sparkRCArray, 18, 0x3E8);
+
+                        //calc end CRC
+                        crc = CalcCRC(sparkRCArray, sparkRCArray.Length - 2);
+                        crc_array = BitConverter.GetBytes(crc);
+                        Buffer.BlockCopy(crc_array, 0, sparkRCArray, sparkRCArray.Length - 2, 2);
+
+                        //debug test
+                        Console.Write("\r\n");
+                        for (int k = 0; k != sparkRCArray.Length; k++)
+                        {
+                            Console.Write(sparkRCArray[k].ToString("X2"));
+                            Console.Write(" ");
+                        }
+                        //Console.WriteLine(calc_pkt55_hdr_checksum(0x77, packet2_sparkrc, 3).ToString("X2"));
+
+
+                          using (TcpClient tcpClient = new TcpClient())
+                          {
+                              try
+                              {
+                                  tcpClient.Connect("10.0.0.12", 22);
+                                  NetworkStream stream = tcpClient.GetStream();
+                                  Console.WriteLine("Port open");
+                              }
+                              catch (Exception)
+                              {
+                                  Console.WriteLine("Port closed");
+                              }
+                          }
+                        //serialPort1.Close();
+                        toolStripStatusLabel1.Text = "DUML Sent";
+            */
+
+            //Send_DUML_TCP(uint src, uint dest, uint cmd_type, uint cmd_set, uint cmd_id, byte[] data, int blockSize)
+            Send_File_DUML_TCP(0x02, 0x1B, 0x00, 0x00, 0x09, FWarray, 1000);
+        }
+        void Send_File_DUML_TCP(uint src, uint dest, uint cmd_type, uint cmd_set, uint cmd_id, byte[] data, int blockSize)
+        {
+            //build and setup our temp working array
+            byte[] tmpArray = new byte[blockSize + 20];
+            tmpArray[0] = 0x55;             //Header
+            tmpArray[4] = (byte)src;        //Source device
+            tmpArray[5] = (byte)dest;       //Target device
+            tmpArray[6] = 0x00;             //Seq LSB
+            tmpArray[7] = 0x00;             //Seq MSB
+            tmpArray[8] = (byte)cmd_type;   //Command Type
+            tmpArray[8] = (byte)cmd_set;    //Command Set
+            tmpArray[10] = (byte)cmd_id;    //Command ID
+
+            byte[] length_array;
+            byte[] size_array = BitConverter.GetBytes(blockSize);
+            byte[] crc_array;
+            uint crc;
+            uint length;
+
+            //total packet length = 20 bytes + data blocksize
+            length = (uint)blockSize + 20;
+            length_array = BitConverter.GetBytes(length);
+
+            //set to V1 DUML. Flip the bit
+            length_array[1] += 0x04;
+            Buffer.BlockCopy(length_array, 0, tmpArray, 1, 2);
+
+            //calc header CRC8 using a seed of 0x77
+            tmpArray[3] = (byte)calc_pkt55_hdr_checksum(0x77, tmpArray, 3);
+            Buffer.BlockCopy(data, 0, tmpArray, 18, blockSize);
+
+            //insert data packet size. Used by CMD ID 0x09
+            Buffer.BlockCopy(size_array, 0, tmpArray, 16, 2);
+
+            //calc end CRC16
+            crc = CalcCRC(tmpArray, tmpArray.Length - 2);
+            crc_array = BitConverter.GetBytes(crc);
+            Buffer.BlockCopy(crc_array, 0, tmpArray, tmpArray.Length - 2, 2);
+
+            //debug test
+            Console.Write("\r\n");
+            for (int k = 0; k != tmpArray.Length; k++)
+            {
+                Console.Write(tmpArray[k].ToString("X2"));
+                Console.Write(" ");
+            }
+
+        }
+
+        private void linkLabel1_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e)
+        {
+            System.Diagnostics.Process.Start("www.github.com/jezzab/DUMLdore");
         }
     }
 }
