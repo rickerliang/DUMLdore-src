@@ -462,6 +462,7 @@ namespace DUMLdore
                     HostName = "192.168.42.2",
                     UserName = "guest",
                     Password = "password",
+                    TimeoutInMilliseconds = 30000,    // Default 15sec timeout is too short for aircraft to generate the encrypted temp files in some cases
                 };
                 using (Session session = new Session())
                 {
